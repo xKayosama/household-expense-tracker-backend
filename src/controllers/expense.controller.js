@@ -712,9 +712,53 @@ const updateExpense = async (req, res) => {
   }
 };
 
+const deleteExpense = async (req, res) => {
+  try {
+    const { expenseId } = req.params;
+
+    const expense = await Expense.findById(expenseId);
+
+    if (!expense) {
+      return res.status(404).json({
+        success: false,
+        message: 'Expense not found.'
+      });
+    }
+
+    // Check if the logged-in user is an active household member
+    const membership = await HouseholdMember.findOne({
+      householdId: expense.householdId,
+      userId: req.user._id,
+      status: 'ACTIVE'
+    });
+
+    if (!membership) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have access to this expense.'
+      });
+    }
+
+    await Expense.findByIdAndDelete(expenseId);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Expense deleted successfully.'
+    });
+  } catch (error) {
+    console.error('Delete expense error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Something went wrong while deleting the expense.'
+    });
+  }
+};
+
 module.exports = {
   createExpense,
   getHouseholdExpenses,
   getExpenseById,
-  updateExpense
+  updateExpense,
+  deleteExpense
 };

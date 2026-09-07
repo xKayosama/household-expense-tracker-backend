@@ -1,6 +1,210 @@
-const mongoose = require('mongoose');
 const Expense = require('../models/Expense');
 const HouseholdMember = require('../models/HouseholdMember');
+
+// -----------------------------
+// Calculate expense participants
+// -----------------------------
+
+const calculateExpenseParticipants = ({
+  amount,
+  splitType,
+  participants
+}) => {
+  const normalizedAmount = Number(amount);
+  const normalizedSplitType = (
+    splitType || 'EQUAL'
+  ).toUpperCase();
+
+  if (
+    !['EQUAL', 'EXACT', 'PERCENTAGE'].includes(
+      normalizedSplitType
+    )
+  ) {
+    return {
+      error:
+        'Invalid split type. Supported types are EQUAL, EXACT, and PERCENTAGE.'
+    };
+  }
+
+  // -----------------------------
+  // Equal split
+  // -----------------------------
+
+  if (normalizedSplitType === 'EQUAL') {
+    const baseAmount =
+      Math.floor(
+        (normalizedAmount / participants.length) * 100
+      ) / 100;
+
+    const remainder = Number(
+      (
+        normalizedAmount -
+        baseAmount * participants.length
+      ).toFixed(2)
+    );
+
+    const finalParticipants = participants.map(
+      (participant, index) => ({
+        userId: participant.userId,
+        amount: Number(
+          (
+            baseAmount +
+            (index === 0 ? remainder : 0)
+          ).toFixed(2)
+        ),
+        percentage: null
+      })
+    );
+
+    return {
+      splitType: normalizedSplitType,
+      participants: finalParticipants
+    };
+  }
+
+  // -----------------------------
+  // Exact split
+  // -----------------------------
+
+  if (normalizedSplitType === 'EXACT') {
+    if (
+      participants.some(
+        (participant) =>
+          participant.amount === undefined ||
+          participant.amount === null ||
+          Number(participant.amount) < 0
+      )
+    ) {
+      return {
+        error: 'Each participant must have a valid amount.'
+      };
+    }
+
+    const finalParticipants = participants.map(
+      (participant) => ({
+        userId: participant.userId,
+        amount: Number(
+          Number(participant.amount).toFixed(2)
+        ),
+        percentage: null
+      })
+    );
+
+    const participantTotal = Number(
+      finalParticipants
+        .reduce(
+          (total, participant) =>
+            total + participant.amount,
+          0
+        )
+        .toFixed(2)
+    );
+
+    if (
+      participantTotal !==
+      Number(normalizedAmount.toFixed(2))
+    ) {
+      return {
+        error:
+          'Participant amounts must equal the expense amount.'
+      };
+    }
+
+    return {
+      splitType: normalizedSplitType,
+      participants: finalParticipants
+    };
+  }
+
+  // -----------------------------
+  // Percentage split
+  // -----------------------------
+
+  if (normalizedSplitType === 'PERCENTAGE') {
+    if (
+      participants.some(
+        (participant) =>
+          participant.percentage === undefined ||
+          participant.percentage === null ||
+          Number(participant.percentage) < 0 ||
+          Number(participant.percentage) > 100
+      )
+    ) {
+      return {
+        error:
+          'Each participant must have a valid percentage between 0 and 100.'
+      };
+    }
+
+    const totalPercentage = participants.reduce(
+      (total, participant) =>
+        total + Number(participant.percentage),
+      0
+    );
+
+    if (
+      Math.round(totalPercentage * 100) !== 10000
+    ) {
+      return {
+        error:
+          'Participant percentages must total 100%.'
+      };
+    }
+
+    const finalParticipants = participants.map(
+      (participant) => ({
+        userId: participant.userId,
+        amount: Number(
+          (
+            normalizedAmount *
+            (Number(participant.percentage) / 100)
+          ).toFixed(2)
+        ),
+        percentage: Number(
+          Number(participant.percentage).toFixed(2)
+        )
+      })
+    );
+
+    // Fix rounding difference
+    const calculatedTotal =
+      finalParticipants.reduce(
+        (total, participant) =>
+          total + participant.amount,
+        0
+      );
+
+    const difference = Number(
+      (
+        normalizedAmount -
+        calculatedTotal
+      ).toFixed(2)
+    );
+
+    if (difference !== 0) {
+      const lastParticipant =
+        finalParticipants[
+          finalParticipants.length - 1
+        ];
+
+      lastParticipant.amount = Number(
+        (
+          lastParticipant.amount +
+          difference
+        ).toFixed(2)
+      );
+    }
+
+    return {
+      splitType: normalizedSplitType,
+      participants: finalParticipants
+    };
+  }
+};
+
+// -----------------------------
+// Create Expense
+// -----------------------------
 
 const createExpense = async (req, res) => {
   try {
@@ -23,6 +227,7 @@ const createExpense = async (req, res) => {
 
     if (!description) {
       return res.status(400).json({
+        code: 400,
         success: false,
         message: 'Expense description is required.'
       });
@@ -30,22 +235,31 @@ const createExpense = async (req, res) => {
 
     if (!amount || Number(amount) <= 0) {
       return res.status(400).json({
+        code: 400,
         success: false,
-        message: 'Expense amount must be greater than zero.'
+        message:
+          'Expense amount must be greater than zero.'
       });
     }
 
     if (!paidBy) {
       return res.status(400).json({
+        code: 400,
         success: false,
         message: 'paidBy is required.'
       });
     }
 
-    if (!participants || !Array.isArray(participants) || participants.length === 0) {
+    if (
+      !participants ||
+      !Array.isArray(participants) ||
+      participants.length === 0
+    ) {
       return res.status(400).json({
+        code: 400,
         success: false,
-        message: 'At least one participant is required.'
+        message:
+          'At least one participant is required.'
       });
     }
 
@@ -55,16 +269,19 @@ const createExpense = async (req, res) => {
     // Check payer membership
     // -----------------------------
 
-    const payerMembership = await HouseholdMember.findOne({
-      householdId,
-      userId: paidBy,
-      status: 'ACTIVE'
-    });
+    const payerMembership =
+      await HouseholdMember.findOne({
+        householdId,
+        userId: paidBy,
+        status: 'ACTIVE'
+      });
 
     if (!payerMembership) {
       return res.status(400).json({
+        code: 400,
         success: false,
-        message: 'The payer is not an active member of this household.'
+        message:
+          'The payer is not an active member of this household.'
       });
     }
 
@@ -76,104 +293,58 @@ const createExpense = async (req, res) => {
       (participant) => participant.userId
     );
 
-    // Prevent duplicate participants
     const uniqueParticipantIds = new Set(
       participantIds.map((id) => id.toString())
     );
 
-    if (uniqueParticipantIds.size !== participantIds.length) {
+    if (
+      uniqueParticipantIds.size !==
+      participantIds.length
+    ) {
       return res.status(400).json({
+        code: 400,
         success: false,
-        message: 'Duplicate participants are not allowed.'
+        message:
+          'Duplicate participants are not allowed.'
       });
     }
 
-    const householdMembers = await HouseholdMember.find({
-      householdId,
-      userId: { $in: participantIds },
-      status: 'ACTIVE'
-    });
+    const householdMembers =
+      await HouseholdMember.find({
+        householdId,
+        userId: { $in: participantIds },
+        status: 'ACTIVE'
+      });
 
-    if (householdMembers.length !== participantIds.length) {
+    if (
+      householdMembers.length !==
+      participantIds.length
+    ) {
       return res.status(400).json({
+        code: 400,
         success: false,
-        message: 'All participants must be active members of this household.'
+        message:
+          'All participants must be active members of this household.'
       });
     }
 
     // -----------------------------
-    // Split validation
+    // Calculate split
     // -----------------------------
 
-    const normalizedSplitType = splitType || 'EQUAL';
-
-    if (!['EQUAL', 'EXACT'].includes(normalizedSplitType)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Only EQUAL and EXACT split types are currently supported.'
+    const splitResult =
+      calculateExpenseParticipants({
+        amount: normalizedAmount,
+        splitType,
+        participants
       });
-    }
 
-    let finalParticipants;
-
-    // -----------------------------
-    // Equal split
-    // -----------------------------
-
-    if (normalizedSplitType === 'EQUAL') {
-      const baseAmount =
-        Math.floor((normalizedAmount / participants.length) * 100) / 100;
-
-      const remainder = Number(
-        (normalizedAmount - baseAmount * participants.length).toFixed(2)
-      );
-
-      finalParticipants = participants.map((participant, index) => ({
-        userId: participant.userId,
-        amount: Number(
-          (
-            baseAmount +
-            (index === 0 ? remainder : 0)
-          ).toFixed(2)
-        )
-      }));
-    }
-
-    // -----------------------------
-    // Exact split
-    // -----------------------------
-
-    if (normalizedSplitType === 'EXACT') {
-      if (
-        participants.some(
-          (participant) =>
-            participant.amount === undefined ||
-            Number(participant.amount) < 0
-        )
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: 'Each participant must have a valid amount.'
-        });
-      }
-
-      finalParticipants = participants.map((participant) => ({
-        userId: participant.userId,
-        amount: Number(Number(participant.amount).toFixed(2))
-      }));
-
-      const participantTotal = Number(
-        finalParticipants
-          .reduce((total, participant) => total + participant.amount, 0)
-          .toFixed(2)
-      );
-
-      if (participantTotal !== Number(normalizedAmount.toFixed(2))) {
-        return res.status(400).json({
-          success: false,
-          message: 'Participant amounts must equal the expense amount.'
-        });
-      }
+    if (splitResult.error) {
+      return res.status(400).json({
+        code: 400,
+        success: false,
+        message: splitResult.error
+      });
     }
 
     // -----------------------------
@@ -184,27 +355,35 @@ const createExpense = async (req, res) => {
       householdId,
       description,
       amount: normalizedAmount,
-      category: category || 'OTHERS',
+      category: category
+        ? category.toUpperCase()
+        : 'OTHERS',
       paidBy,
-      splitType: normalizedSplitType,
-      participants: finalParticipants,
+      splitType: splitResult.splitType,
+      participants: splitResult.participants,
       date: date || new Date(),
       notes: notes || ''
     });
 
-    // Populate useful information
+    // -----------------------------
+    // Populate response
+    // -----------------------------
+
     await expense.populate([
       {
         path: 'paidBy',
-        select: 'firstName lastName email avatar'
+        select:
+          'firstName lastName email avatar'
       },
       {
         path: 'participants.userId',
-        select: 'firstName lastName email avatar'
+        select:
+          'firstName lastName email avatar'
       }
     ]);
 
     return res.status(201).json({
+      code: 201,
       success: true,
       message: 'Expense created successfully.',
       data: {
@@ -212,14 +391,23 @@ const createExpense = async (req, res) => {
       }
     });
   } catch (error) {
-    console.error('Create expense error:', error);
+    console.error(
+      'Create expense error:',
+      error
+    );
 
     return res.status(500).json({
+      code: 500,
       success: false,
-      message: 'Something went wrong while creating the expense.'
+      message:
+        'Something went wrong while creating the expense.'
     });
   }
 };
+
+// -----------------------------
+// Get Household Expenses
+// -----------------------------
 
 const getHouseholdExpenses = async (req, res) => {
   try {
@@ -233,9 +421,19 @@ const getHouseholdExpenses = async (req, res) => {
       endDate
     } = req.query;
 
-    const currentPage = Math.max(Number(page), 1);
-    const currentLimit = Math.min(Math.max(Number(limit), 1), 100);
-    const skip = (currentPage - 1) * currentLimit;
+    const currentPage = Math.max(
+      Number(page),
+      1
+    );
+
+    const currentLimit = Math.min(
+      Math.max(Number(limit), 1),
+      100
+    );
+
+    const skip =
+      (currentPage - 1) *
+      currentLimit;
 
     // -----------------------------
     // Build filters
@@ -250,26 +448,38 @@ const getHouseholdExpenses = async (req, res) => {
     // -----------------------------
 
     if (category) {
-      filters.category = category.toUpperCase();
+      filters.category =
+        category.toUpperCase();
     }
 
     // -----------------------------
     // Date filter
     // -----------------------------
 
-    const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+    const dateRegex =
+      /^\d{4}-\d{2}-\d{2}$/;
 
-    if (startDate && !dateRegex.test(startDate)) {
+    if (
+      startDate &&
+      !dateRegex.test(startDate)
+    ) {
       return res.status(400).json({
+        code: 400,
         success: false,
-        message: 'Invalid startDate. Expected format: YYYY-MM-DD.'
+        message:
+          'Invalid startDate. Expected format: YYYY-MM-DD.'
       });
     }
 
-    if (endDate && !dateRegex.test(endDate)) {
+    if (
+      endDate &&
+      !dateRegex.test(endDate)
+    ) {
       return res.status(400).json({
+        code: 400,
         success: false,
-        message: 'Invalid endDate. Expected format: YYYY-MM-DD.'
+        message:
+          'Invalid endDate. Expected format: YYYY-MM-DD.'
       });
     }
 
@@ -278,12 +488,18 @@ const getHouseholdExpenses = async (req, res) => {
 
       // Start date
       if (startDate) {
-        const start = new Date(`${startDate}T00:00:00.000Z`);
+        const start = new Date(
+          `${startDate}T00:00:00.000Z`
+        );
 
-        if (Number.isNaN(start.getTime())) {
+        if (
+          Number.isNaN(start.getTime())
+        ) {
           return res.status(400).json({
+            code: 400,
             success: false,
-            message: 'Invalid startDate.'
+            message:
+              'Invalid startDate.'
           });
         }
 
@@ -292,148 +508,190 @@ const getHouseholdExpenses = async (req, res) => {
 
       // End date
       if (endDate) {
-        const end = new Date(`${endDate}T00:00:00.000Z`);
+        const end = new Date(
+          `${endDate}T00:00:00.000Z`
+        );
 
-        if (Number.isNaN(end.getTime())) {
+        if (
+          Number.isNaN(end.getTime())
+        ) {
           return res.status(400).json({
+            code: 400,
             success: false,
-            message: 'Invalid endDate.'
+            message:
+              'Invalid endDate.'
           });
         }
 
         // Include the entire end date
-        end.setUTCDate(end.getUTCDate() + 1);
+        end.setUTCDate(
+          end.getUTCDate() + 1
+        );
 
         filters.date.$lt = end;
       }
     }
 
     // -----------------------------
-    // Debug
-    // -----------------------------
-
-    console.log('Expense filters:', {
-      householdId,
-      category,
-      startDate,
-      endDate,
-      dateFilter: filters.date
-        ? {
-            gte: filters.date.$gte?.toISOString(),
-            lt: filters.date.$lt?.toISOString()
-          }
-        : null
-    });
-
-    // -----------------------------
     // Get expenses
     // -----------------------------
 
-    const [expenses, total] = await Promise.all([
-      Expense.find(filters)
-        .populate({
-          path: 'paidBy',
-          select: 'firstName lastName email avatar'
-        })
-        .populate({
-          path: 'participants.userId',
-          select: 'firstName lastName email avatar'
-        })
-        .sort({
-          date: -1,
-          createdAt: -1
-        })
-        .skip(skip)
-        .limit(currentLimit),
+    const [expenses, total] =
+      await Promise.all([
+        Expense.find(filters)
+          .populate({
+            path: 'paidBy',
+            select:
+              'firstName lastName email avatar'
+          })
+          .populate({
+            path: 'participants.userId',
+            select:
+              'firstName lastName email avatar'
+          })
+          .sort({
+            date: -1,
+            createdAt: -1
+          })
+          .skip(skip)
+          .limit(currentLimit),
 
-      Expense.countDocuments(filters)
-    ]);
+        Expense.countDocuments(filters)
+      ]);
 
     // -----------------------------
     // Pagination
     // -----------------------------
 
-    const totalPages = Math.ceil(total / currentLimit);
+    const totalPages = Math.ceil(
+      total / currentLimit
+    );
 
     return res.status(200).json({
+      code: 200,
       success: true,
+      message:
+        'Expenses retrieved successfully.',
       data: {
-        expenses,
-        pagination: {
-          page: currentPage,
-          limit: currentLimit,
-          total,
-          totalPages,
-          hasNextPage: currentPage < totalPages,
-          hasPreviousPage: currentPage > 1
-        }
+        expenses
+      },
+      pagination: {
+        page: currentPage,
+        limit: currentLimit,
+        total,
+        totalPages,
+        hasNextPage:
+          currentPage < totalPages,
+        hasPreviousPage:
+          currentPage > 1
       }
     });
   } catch (error) {
-    console.error('Get household expenses error:', error);
+    console.error(
+      'Get household expenses error:',
+      error
+    );
 
     return res.status(500).json({
+      code: 500,
       success: false,
-      message: 'Something went wrong while retrieving expenses.'
+      message:
+        'Something went wrong while retrieving expenses.'
     });
   }
 };
 
-const getExpenseById = async (req, res) => {
-  try {
-    const { expenseId } = req.params;
+// -----------------------------
+// Get Expense By ID
+// -----------------------------
 
-    const expense = await Expense.findById(expenseId)
-      .populate({
-        path: 'paidBy',
-        select: 'firstName lastName email avatar'
-      })
-      .populate({
-        path: 'participants.userId',
-        select: 'firstName lastName email avatar'
-      });
+const getExpenseById = async (
+  req,
+  res
+) => {
+  try {
+    const { expenseId } =
+      req.params;
+
+    const expense =
+      await Expense.findById(
+        expenseId
+      )
+        .populate({
+          path: 'paidBy',
+          select:
+            'firstName lastName email avatar'
+        })
+        .populate({
+          path: 'participants.userId',
+          select:
+            'firstName lastName email avatar'
+        });
 
     if (!expense) {
       return res.status(404).json({
+        code: 404,
         success: false,
         message: 'Expense not found.'
       });
     }
 
-    // Check if the authenticated user belongs
-    // to the household that owns this expense.
-    const membership = await HouseholdMember.findOne({
-      householdId: expense.householdId,
-      userId: req.user._id,
-      status: 'ACTIVE'
-    });
+    // -----------------------------
+    // Check household membership
+    // -----------------------------
+
+    const membership =
+      await HouseholdMember.findOne({
+        householdId:
+          expense.householdId,
+        userId: req.user._id,
+        status: 'ACTIVE'
+      });
 
     if (!membership) {
       return res.status(403).json({
+        code: 403,
         success: false,
-        message: 'You do not have access to this expense.'
+        message:
+          'You do not have access to this expense.'
       });
     }
 
     return res.status(200).json({
+      code: 200,
       success: true,
+      message:
+        'Expense retrieved successfully.',
       data: {
         expense
       }
     });
   } catch (error) {
-    console.error('Get expense by ID error:', error);
+    console.error(
+      'Get expense by ID error:',
+      error
+    );
 
     return res.status(500).json({
+      code: 500,
       success: false,
-      message: 'Something went wrong while retrieving the expense.'
+      message:
+        'Something went wrong while retrieving the expense.'
     });
   }
 };
 
-const updateExpense = async (req, res) => {
+// -----------------------------
+// Update Expense
+// -----------------------------
+
+const updateExpense = async (
+  req,
+  res
+) => {
   try {
-    const { expenseId } = req.params;
+    const { expenseId } =
+      req.params;
 
     const {
       description,
@@ -446,31 +704,48 @@ const updateExpense = async (req, res) => {
       notes
     } = req.body;
 
-    // Find the expense first
-    const expense = await Expense.findById(expenseId);
+    // -----------------------------
+    // Find expense
+    // -----------------------------
+
+    const expense =
+      await Expense.findById(
+        expenseId
+      );
 
     if (!expense) {
       return res.status(404).json({
+        code: 404,
         success: false,
         message: 'Expense not found.'
       });
     }
 
-    // Check if the logged-in user is still an active member
-    const membership = await HouseholdMember.findOne({
-      householdId: expense.householdId,
-      userId: req.user._id,
-      status: 'ACTIVE'
-    });
+    // -----------------------------
+    // Check membership
+    // -----------------------------
+
+    const membership =
+      await HouseholdMember.findOne({
+        householdId:
+          expense.householdId,
+        userId: req.user._id,
+        status: 'ACTIVE'
+      });
 
     if (!membership) {
       return res.status(403).json({
+        code: 403,
         success: false,
-        message: 'You do not have access to this expense.'
+        message:
+          'You do not have access to this expense.'
       });
     }
 
-    // Use existing values when fields are not provided
+    // -----------------------------
+    // Existing values
+    // -----------------------------
+
     const updatedDescription =
       description !== undefined
         ? description
@@ -511,246 +786,286 @@ const updateExpense = async (req, res) => {
         ? notes
         : expense.notes;
 
+    // -----------------------------
     // Basic validation
+    // -----------------------------
+
     if (!updatedDescription) {
       return res.status(400).json({
+        code: 400,
         success: false,
-        message: 'Expense description is required.'
+        message:
+          'Expense description is required.'
       });
     }
 
-    if (!updatedAmount || updatedAmount <= 0) {
+    if (
+      !updatedAmount ||
+      updatedAmount <= 0
+    ) {
       return res.status(400).json({
+        code: 400,
         success: false,
-        message: 'Expense amount must be greater than zero.'
+        message:
+          'Expense amount must be greater than zero.'
       });
     }
 
     if (!updatedPaidBy) {
       return res.status(400).json({
+        code: 400,
         success: false,
-        message: 'paidBy is required.'
+        message:
+          'paidBy is required.'
       });
     }
 
     if (
       !updatedParticipants ||
-      !Array.isArray(updatedParticipants) ||
+      !Array.isArray(
+        updatedParticipants
+      ) ||
       updatedParticipants.length === 0
     ) {
       return res.status(400).json({
+        code: 400,
         success: false,
-        message: 'At least one participant is required.'
+        message:
+          'At least one participant is required.'
       });
     }
 
-    // Check payer is an active household member
-    const payerMembership = await HouseholdMember.findOne({
-      householdId: expense.householdId,
-      userId: updatedPaidBy,
-      status: 'ACTIVE'
-    });
+    // -----------------------------
+    // Check payer membership
+    // -----------------------------
+
+    const payerMembership =
+      await HouseholdMember.findOne({
+        householdId:
+          expense.householdId,
+        userId: updatedPaidBy,
+        status: 'ACTIVE'
+      });
 
     if (!payerMembership) {
       return res.status(400).json({
+        code: 400,
         success: false,
-        message: 'The payer is not an active member of this household.'
+        message:
+          'The payer is not an active member of this household.'
       });
     }
 
-    // Check duplicate participants
-    const participantIds = updatedParticipants.map(
-      (participant) => participant.userId
-    );
+    // -----------------------------
+    // Check participants
+    // -----------------------------
 
-    const uniqueParticipantIds = new Set(
-      participantIds.map((id) => id.toString())
-    );
-
-    if (uniqueParticipantIds.size !== participantIds.length) {
-      return res.status(400).json({
-        success: false,
-        message: 'Duplicate participants are not allowed.'
-      });
-    }
-
-    // Check all participants belong to household
-    const householdMembers = await HouseholdMember.find({
-      householdId: expense.householdId,
-      userId: { $in: participantIds },
-      status: 'ACTIVE'
-    });
-
-    if (householdMembers.length !== participantIds.length) {
-      return res.status(400).json({
-        success: false,
-        message: 'All participants must be active members of this household.'
-      });
-    }
-
-    // Validate split type
-    if (!['EQUAL', 'EXACT'].includes(updatedSplitType)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Only EQUAL and EXACT split types are currently supported.'
-      });
-    }
-
-    let finalParticipants;
-
-    // EQUAL split
-    if (updatedSplitType === 'EQUAL') {
-      const baseAmount =
-        Math.floor(
-          (updatedAmount / updatedParticipants.length) * 100
-        ) / 100;
-
-      const remainder = Number(
-        (
-          updatedAmount -
-          baseAmount * updatedParticipants.length
-        ).toFixed(2)
+    const participantIds =
+      updatedParticipants.map(
+        (participant) =>
+          participant.userId
       );
 
-      finalParticipants = updatedParticipants.map(
-        (participant, index) => ({
-          userId: participant.userId,
-          amount: Number(
-            (
-              baseAmount +
-              (index === 0 ? remainder : 0)
-            ).toFixed(2)
-          )
-        })
-      );
-    }
-
-    // EXACT split
-    if (updatedSplitType === 'EXACT') {
-      if (
-        updatedParticipants.some(
-          (participant) =>
-            participant.amount === undefined ||
-            Number(participant.amount) < 0
+    const uniqueParticipantIds =
+      new Set(
+        participantIds.map((id) =>
+          id.toString()
         )
-      ) {
-        return res.status(400).json({
-          success: false,
-          message: 'Each participant must have a valid amount.'
-        });
-      }
-
-      finalParticipants = updatedParticipants.map(
-        (participant) => ({
-          userId: participant.userId,
-          amount: Number(
-            Number(participant.amount).toFixed(2)
-          )
-        })
       );
 
-      const participantTotal = Number(
-        finalParticipants
-          .reduce(
-            (total, participant) =>
-              total + participant.amount,
-            0
-          )
-          .toFixed(2)
-      );
-
-      if (
-        participantTotal !==
-        Number(updatedAmount.toFixed(2))
-      ) {
-        return res.status(400).json({
-          success: false,
-          message:
-            'Participant amounts must equal the expense amount.'
-        });
-      }
+    if (
+      uniqueParticipantIds.size !==
+      participantIds.length
+    ) {
+      return res.status(400).json({
+        code: 400,
+        success: false,
+        message:
+          'Duplicate participants are not allowed.'
+      });
     }
 
+    const householdMembers =
+      await HouseholdMember.find({
+        householdId:
+          expense.householdId,
+        userId: {
+          $in: participantIds
+        },
+        status: 'ACTIVE'
+      });
+
+    if (
+      householdMembers.length !==
+      participantIds.length
+    ) {
+      return res.status(400).json({
+        code: 400,
+        success: false,
+        message:
+          'All participants must be active members of this household.'
+      });
+    }
+
+    // -----------------------------
+    // Calculate split
+    // -----------------------------
+
+    const splitResult =
+      calculateExpenseParticipants({
+        amount: updatedAmount,
+        splitType:
+          updatedSplitType,
+        participants:
+          updatedParticipants
+      });
+
+    if (splitResult.error) {
+      return res.status(400).json({
+        code: 400,
+        success: false,
+        message: splitResult.error
+      });
+    }
+
+    // -----------------------------
     // Update expense
-    expense.description = updatedDescription;
-    expense.amount = updatedAmount;
-    expense.category = updatedCategory;
-    expense.paidBy = updatedPaidBy;
-    expense.splitType = updatedSplitType;
-    expense.participants = finalParticipants;
-    expense.date = updatedDate;
-    expense.notes = updatedNotes;
+    // -----------------------------
+
+    expense.description =
+      updatedDescription;
+
+    expense.amount =
+      updatedAmount;
+
+    expense.category =
+      updatedCategory;
+
+    expense.paidBy =
+      updatedPaidBy;
+
+    expense.splitType =
+      splitResult.splitType;
+
+    expense.participants =
+      splitResult.participants;
+
+    expense.date =
+      updatedDate;
+
+    expense.notes =
+      updatedNotes;
 
     await expense.save();
 
+    // -----------------------------
     // Populate response
+    // -----------------------------
+
     await expense.populate([
       {
         path: 'paidBy',
-        select: 'firstName lastName email avatar'
+        select:
+          'firstName lastName email avatar'
       },
       {
         path: 'participants.userId',
-        select: 'firstName lastName email avatar'
+        select:
+          'firstName lastName email avatar'
       }
     ]);
 
     return res.status(200).json({
+      code: 200,
       success: true,
-      message: 'Expense updated successfully.',
+      message:
+        'Expense updated successfully.',
       data: {
         expense
       }
     });
   } catch (error) {
-    console.error('Update expense error:', error);
+    console.error(
+      'Update expense error:',
+      error
+    );
 
     return res.status(500).json({
+      code: 500,
       success: false,
-      message: 'Something went wrong while updating the expense.'
+      message:
+        'Something went wrong while updating the expense.'
     });
   }
 };
 
-const deleteExpense = async (req, res) => {
-  try {
-    const { expenseId } = req.params;
+// -----------------------------
+// Delete Expense
+// -----------------------------
 
-    const expense = await Expense.findById(expenseId);
+const deleteExpense = async (
+  req,
+  res
+) => {
+  try {
+    const { expenseId } =
+      req.params;
+
+    const expense =
+      await Expense.findById(
+        expenseId
+      );
 
     if (!expense) {
       return res.status(404).json({
+        code: 404,
         success: false,
         message: 'Expense not found.'
       });
     }
 
-    // Check if the logged-in user is an active household member
-    const membership = await HouseholdMember.findOne({
-      householdId: expense.householdId,
-      userId: req.user._id,
-      status: 'ACTIVE'
-    });
+    // -----------------------------
+    // Check membership
+    // -----------------------------
+
+    const membership =
+      await HouseholdMember.findOne({
+        householdId:
+          expense.householdId,
+        userId: req.user._id,
+        status: 'ACTIVE'
+      });
 
     if (!membership) {
       return res.status(403).json({
+        code: 403,
         success: false,
-        message: 'You do not have access to this expense.'
+        message:
+          'You do not have access to this expense.'
       });
     }
 
-    await Expense.findByIdAndDelete(expenseId);
+    await Expense.findByIdAndDelete(
+      expenseId
+    );
 
     return res.status(200).json({
+      code: 200,
       success: true,
-      message: 'Expense deleted successfully.'
+      message:
+        'Expense deleted successfully.'
     });
   } catch (error) {
-    console.error('Delete expense error:', error);
+    console.error(
+      'Delete expense error:',
+      error
+    );
 
     return res.status(500).json({
+      code: 500,
       success: false,
-      message: 'Something went wrong while deleting the expense.'
+      message:
+        'Something went wrong while deleting the expense.'
     });
   }
 };

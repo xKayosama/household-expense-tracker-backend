@@ -430,6 +430,7 @@ const getExpenseById = async (req, res) => {
     });
   }
 };
+
 module.exports = {
   createExpense,
   getHouseholdExpenses,

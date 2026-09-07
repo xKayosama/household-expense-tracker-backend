@@ -3,7 +3,8 @@ const express = require('express');
 const {
   createExpense,
   getHouseholdExpenses,
-  getExpenseById
+  getExpenseById,
+  updateExpense
 } = require('../controllers/expense.controller');
 
 const { protect } = require('../middleware/auth');
@@ -17,7 +18,7 @@ router.post(
   householdAccess,
   createExpense
 );
-
+  
 router.get(
   '/:id/expenses',
   protect,
@@ -29,6 +30,12 @@ router.get(
   '/:expenseId',
   protect,
   getExpenseById
+);
+
+router.put(
+  '/:expenseId',
+  protect,
+  updateExpense
 );
 
 module.exports = router;

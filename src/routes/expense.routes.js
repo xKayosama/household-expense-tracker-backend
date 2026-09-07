@@ -4,7 +4,8 @@ const {
   createExpense,
   getHouseholdExpenses,
   getExpenseById,
-  updateExpense
+  updateExpense,
+  deleteExpense
 } = require('../controllers/expense.controller');
 
 const { protect } = require('../middleware/auth');
@@ -36,6 +37,12 @@ router.put(
   '/:expenseId',
   protect,
   updateExpense
+);
+
+router.delete(
+  '/:expenseId',
+  protect,
+  deleteExpense
 );
 
 module.exports = router;

@@ -7,6 +7,7 @@ const expenseRoutes = require('./routes/expense.routes');
 const balanceRoutes = require('./routes/balance.routes');
 const settlementRoutes = require('./routes/settlement.routes');
 const billRoutes = require('./routes/bill.routes');
+const dashboardRoutes = require('./routes/dashboard.routes');
 
 const app = express();
 
@@ -23,10 +24,12 @@ app.get('/api/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/households', householdRoutes);
 app.use('/api/households', expenseRoutes);
-app.use('/api/expenses', expenseRoutes);
 app.use('/api/households', balanceRoutes);
 app.use('/api/households', settlementRoutes);
 app.use('/api/households', billRoutes);
+app.use('/api/households', dashboardRoutes);
+
+app.use('/api/expenses', expenseRoutes);
 app.use('/api/bills', billRoutes);
 
 module.exports = app;

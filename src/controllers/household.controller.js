@@ -1,6 +1,8 @@
 const User = require('../models/User');
 const Household = require('../models/Household');
 const HouseholdMember = require('../models/HouseholdMember');
+const Expense = require('../models/Expense');
+const Bill = require('../models/Bill');
 
 const createHousehold = async (req, res) => {
   try {
@@ -248,10 +250,182 @@ const removeHouseholdMember = async (req, res) => {
   }
 };
 
+const getHouseholdMembers = async (req, res) => {
+  try {
+    const { id: householdId } = req.params;
+
+    const members = await HouseholdMember.find({
+      householdId,
+      status: 'ACTIVE'
+    })
+      .populate({
+        path: 'userId',
+        select: 'firstName lastName email avatar'
+      })
+      .sort({
+        role: 1,
+        joinedAt: 1
+      });
+
+    return res.status(200).json({
+      code: 200,
+      success: true,
+      message: 'Household members retrieved successfully.',
+      data: {
+        members
+      }
+    });
+  } catch (error) {
+    console.error('Get household members error:', error);
+
+    return res.status(500).json({
+      code: 500,
+      success: false,
+      message:
+        'Something went wrong while retrieving household members.'
+    });
+  }
+};
+
+const updateHousehold = async (req, res) => {
+  try {
+    const { id: householdId } = req.params;
+    const { name, currency } = req.body;
+
+    const household = await Household.findById(householdId);
+
+    if (!household) {
+      return res.status(404).json({
+        code: 404,
+        success: false,
+        message: 'Household not found.'
+      });
+    }
+
+    // Only the owner can update the household
+    if (household.ownerId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        code: 403,
+        success: false,
+        message: 'Only the household owner can update this household.'
+      });
+    }
+
+    if (name !== undefined) {
+      const updatedName = name.trim();
+
+      if (!updatedName) {
+        return res.status(400).json({
+          code: 400,
+          success: false,
+          message: 'Household name is required.'
+        });
+      }
+
+      household.name = updatedName;
+    }
+
+    if (currency !== undefined) {
+      const updatedCurrency = currency.trim().toUpperCase();
+
+      if (!updatedCurrency) {
+        return res.status(400).json({
+          code: 400,
+          success: false,
+          message: 'Currency is required.'
+        });
+      }
+
+      household.currency = updatedCurrency;
+    }
+
+    await household.save();
+
+    return res.status(200).json({
+      code: 200,
+      success: true,
+      message: 'Household updated successfully.',
+      data: {
+        household
+      }
+    });
+  } catch (error) {
+    console.error('Update household error:', error);
+
+    return res.status(500).json({
+      code: 500,
+      success: false,
+      message:
+        'Something went wrong while updating the household.'
+    });
+  }
+};
+
+const deleteHousehold = async (req, res) => {
+  try {
+    const { id: householdId } = req.params;
+
+    const household = await Household.findById(householdId);
+
+    if (!household) {
+      return res.status(404).json({
+        code: 404,
+        success: false,
+        message: 'Household not found.'
+      });
+    }
+
+    // Only the owner can delete the household
+    if (household.ownerId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({
+        code: 403,
+        success: false,
+        message: 'Only the household owner can delete this household.'
+      });
+    }
+
+    await Household.findByIdAndDelete(householdId);
+
+    // Remove household memberships
+    await HouseholdMember.deleteMany({
+      householdId
+    });
+
+    // Remove household expenses
+    await Expense.deleteMany({
+      householdId
+    });
+
+    // Remove household bills
+    await Bill.deleteMany({
+      householdId
+    });
+
+    return res.status(200).json({
+      code: 200,
+      success: true,
+      message: 'Household deleted successfully.'
+    });
+  } catch (error) {
+    console.error('Delete household error:', error);
+
+    return res.status(500).json({
+      code: 500,
+      success: false,
+      message:
+        'Something went wrong while deleting the household.'
+    });
+  }
+};
+
+
 module.exports = {
   createHousehold,
   getMyHouseholds,
   getHouseholdById,
   addHouseholdMember,
-  removeHouseholdMember
+  removeHouseholdMember,
+  getHouseholdMembers,
+  updateHousehold,
+  deleteHousehold
 };

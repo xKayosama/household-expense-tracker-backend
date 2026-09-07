@@ -431,8 +431,290 @@ const getExpenseById = async (req, res) => {
   }
 };
 
+const updateExpense = async (req, res) => {
+  try {
+    const { expenseId } = req.params;
+
+    const {
+      description,
+      amount,
+      category,
+      paidBy,
+      splitType,
+      participants,
+      date,
+      notes
+    } = req.body;
+
+    // Find the expense first
+    const expense = await Expense.findById(expenseId);
+
+    if (!expense) {
+      return res.status(404).json({
+        success: false,
+        message: 'Expense not found.'
+      });
+    }
+
+    // Check if the logged-in user is still an active member
+    const membership = await HouseholdMember.findOne({
+      householdId: expense.householdId,
+      userId: req.user._id,
+      status: 'ACTIVE'
+    });
+
+    if (!membership) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have access to this expense.'
+      });
+    }
+
+    // Use existing values when fields are not provided
+    const updatedDescription =
+      description !== undefined
+        ? description
+        : expense.description;
+
+    const updatedAmount =
+      amount !== undefined
+        ? Number(amount)
+        : expense.amount;
+
+    const updatedCategory =
+      category !== undefined
+        ? category.toUpperCase()
+        : expense.category;
+
+    const updatedPaidBy =
+      paidBy !== undefined
+        ? paidBy
+        : expense.paidBy;
+
+    const updatedSplitType =
+      splitType !== undefined
+        ? splitType
+        : expense.splitType;
+
+    const updatedParticipants =
+      participants !== undefined
+        ? participants
+        : expense.participants;
+
+    const updatedDate =
+      date !== undefined
+        ? date
+        : expense.date;
+
+    const updatedNotes =
+      notes !== undefined
+        ? notes
+        : expense.notes;
+
+    // Basic validation
+    if (!updatedDescription) {
+      return res.status(400).json({
+        success: false,
+        message: 'Expense description is required.'
+      });
+    }
+
+    if (!updatedAmount || updatedAmount <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Expense amount must be greater than zero.'
+      });
+    }
+
+    if (!updatedPaidBy) {
+      return res.status(400).json({
+        success: false,
+        message: 'paidBy is required.'
+      });
+    }
+
+    if (
+      !updatedParticipants ||
+      !Array.isArray(updatedParticipants) ||
+      updatedParticipants.length === 0
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: 'At least one participant is required.'
+      });
+    }
+
+    // Check payer is an active household member
+    const payerMembership = await HouseholdMember.findOne({
+      householdId: expense.householdId,
+      userId: updatedPaidBy,
+      status: 'ACTIVE'
+    });
+
+    if (!payerMembership) {
+      return res.status(400).json({
+        success: false,
+        message: 'The payer is not an active member of this household.'
+      });
+    }
+
+    // Check duplicate participants
+    const participantIds = updatedParticipants.map(
+      (participant) => participant.userId
+    );
+
+    const uniqueParticipantIds = new Set(
+      participantIds.map((id) => id.toString())
+    );
+
+    if (uniqueParticipantIds.size !== participantIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'Duplicate participants are not allowed.'
+      });
+    }
+
+    // Check all participants belong to household
+    const householdMembers = await HouseholdMember.find({
+      householdId: expense.householdId,
+      userId: { $in: participantIds },
+      status: 'ACTIVE'
+    });
+
+    if (householdMembers.length !== participantIds.length) {
+      return res.status(400).json({
+        success: false,
+        message: 'All participants must be active members of this household.'
+      });
+    }
+
+    // Validate split type
+    if (!['EQUAL', 'EXACT'].includes(updatedSplitType)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Only EQUAL and EXACT split types are currently supported.'
+      });
+    }
+
+    let finalParticipants;
+
+    // EQUAL split
+    if (updatedSplitType === 'EQUAL') {
+      const baseAmount =
+        Math.floor(
+          (updatedAmount / updatedParticipants.length) * 100
+        ) / 100;
+
+      const remainder = Number(
+        (
+          updatedAmount -
+          baseAmount * updatedParticipants.length
+        ).toFixed(2)
+      );
+
+      finalParticipants = updatedParticipants.map(
+        (participant, index) => ({
+          userId: participant.userId,
+          amount: Number(
+            (
+              baseAmount +
+              (index === 0 ? remainder : 0)
+            ).toFixed(2)
+          )
+        })
+      );
+    }
+
+    // EXACT split
+    if (updatedSplitType === 'EXACT') {
+      if (
+        updatedParticipants.some(
+          (participant) =>
+            participant.amount === undefined ||
+            Number(participant.amount) < 0
+        )
+      ) {
+        return res.status(400).json({
+          success: false,
+          message: 'Each participant must have a valid amount.'
+        });
+      }
+
+      finalParticipants = updatedParticipants.map(
+        (participant) => ({
+          userId: participant.userId,
+          amount: Number(
+            Number(participant.amount).toFixed(2)
+          )
+        })
+      );
+
+      const participantTotal = Number(
+        finalParticipants
+          .reduce(
+            (total, participant) =>
+              total + participant.amount,
+            0
+          )
+          .toFixed(2)
+      );
+
+      if (
+        participantTotal !==
+        Number(updatedAmount.toFixed(2))
+      ) {
+        return res.status(400).json({
+          success: false,
+          message:
+            'Participant amounts must equal the expense amount.'
+        });
+      }
+    }
+
+    // Update expense
+    expense.description = updatedDescription;
+    expense.amount = updatedAmount;
+    expense.category = updatedCategory;
+    expense.paidBy = updatedPaidBy;
+    expense.splitType = updatedSplitType;
+    expense.participants = finalParticipants;
+    expense.date = updatedDate;
+    expense.notes = updatedNotes;
+
+    await expense.save();
+
+    // Populate response
+    await expense.populate([
+      {
+        path: 'paidBy',
+        select: 'firstName lastName email avatar'
+      },
+      {
+        path: 'participants.userId',
+        select: 'firstName lastName email avatar'
+      }
+    ]);
+
+    return res.status(200).json({
+      success: true,
+      message: 'Expense updated successfully.',
+      data: {
+        expense
+      }
+    });
+  } catch (error) {
+    console.error('Update expense error:', error);
+
+    return res.status(500).json({
+      success: false,
+      message: 'Something went wrong while updating the expense.'
+    });
+  }
+};
+
 module.exports = {
   createExpense,
   getHouseholdExpenses,
-  getExpenseById
+  getExpenseById,
+  updateExpense
 };

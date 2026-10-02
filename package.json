@@ -1,11 +1,13 @@
 {
-  "name": "household-expense-tracker-backend",
+  "name": "divvy-backend",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
   "scripts": {
     "dev": "nodemon server.js",
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test",
+    "migrate:groups": "node scripts/migrate-groups.js"
   },
   "repository": {
     "type": "git",

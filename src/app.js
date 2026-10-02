@@ -1,13 +1,13 @@
 const express = require('express');
 const cors = require('cors');
 
-const authRoutes = require('./routes/auth.routes');
-const householdRoutes = require('./routes/household.routes');
-const expenseRoutes = require('./routes/expense.routes');
-const balanceRoutes = require('./routes/balance.routes');
-const settlementRoutes = require('./routes/settlement.routes');
-const billRoutes = require('./routes/bill.routes');
-const dashboardRoutes = require('./routes/dashboard.routes');
+const authRoutes = require('./modules/auth/auth.routes');
+const groupRoutes = require('./modules/groups/group.routes');
+const expenseRoutes = require('./modules/expenses/expense.routes');
+const balanceRoutes = require('./modules/balances/balance.routes');
+const settlementRoutes = require('./modules/settlements/settlement.routes');
+const billRoutes = require('./modules/bills/bill.routes');
+const dashboardRoutes = require('./modules/dashboard/dashboard.routes');
 
 const app = express();
 
@@ -22,12 +22,12 @@ app.get('/api/health', (req, res) => {
 });
 
 app.use('/api/auth', authRoutes);
-app.use('/api/households', householdRoutes);
-app.use('/api/households', expenseRoutes);
-app.use('/api/households', balanceRoutes);
-app.use('/api/households', settlementRoutes);
-app.use('/api/households', billRoutes);
-app.use('/api/households', dashboardRoutes);
+app.use('/api/groups', groupRoutes);
+app.use('/api/groups', expenseRoutes);
+app.use('/api/groups', balanceRoutes);
+app.use('/api/groups', settlementRoutes);
+app.use('/api/groups', billRoutes);
+app.use('/api/groups', dashboardRoutes);
 
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/bills', billRoutes);

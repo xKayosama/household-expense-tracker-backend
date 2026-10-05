@@ -103,3 +103,44 @@ field names from the backup during another maintenance window.
 The repository URLs in package.json retain the real upstream repository name.
 The Word developer guide is a historical source-archive document; the Markdown
 guide and this README describe the current code.
+
+## Automatic recurring bills
+
+`server.js` now starts the bill recurrence worker after connecting to MongoDB.
+It creates/verifies the unique occurrence index, runs once on startup, then every
+60 seconds. Index setup failure stops startup instead of risking duplicates.
+No external scheduler, dependency, or new endpoint is needed.
+
+Create a recurring source with the existing `POST /api/groups/:id/bills` endpoint,
+using `isRecurring: true` and recurrence `WEEKLY`, `MONTHLY`, or `YEARLY`.
+The source is the first actual bill. When its due date arrives, the worker creates
+the next bill; each subsequent due date triggers the following occurrence.
+After downtime it catches up, including one upcoming occurrence, up to 120 per
+source per run; remaining backlog continues on subsequent runs.
+
+Generated bills copy name, amount, category, notes and groupId. They start PENDING
+with paidBy null, isRecurring false and recurrence null. They appear in existing
+bill lists and dashboard totals and can be paid/edited/deleted through existing
+bill endpoints. Generation does not create an Expense or change expense balances.
+Generated occurrences cannot be turned into independent recurring sources.
+
+New response/schema fields: recurrenceSourceId links generated bills to their
+source, occurrenceNumber identifies their sequence, and generatedThrough tracks
+source progress. Existing bills need no field backfill; existing recurring bills
+will catch up automatically at first startup, so review their dates before rollout.
+The unique source/occurrence index and atomic upserts prevent duplicate generation
+across servers and retries. Progress is stored separately so deleting an occurrence
+after generation completes does not recreate it.
+
+Date arithmetic uses UTC and the source due date as the anchor. Month/year dates
+clamp to the last available day, then return to the original day when possible
+(Jan 31 -> Feb 28 -> Mar 31; Feb 29 returns in leap years).
+
+Update the source via `PUT /api/bills/:billId` to change future generated values.
+Changing its dueDate or recurrence recalculates future sequence dates from the new
+anchor and existing sequence number; already generated bills remain unchanged.
+Set source isRecurring false to stop future generation, or delete the source.
+Existing generated bills remain as history. Re-enabling resumes the sequence and
+catches up. Paying the source does not disable recurrence. In-flight generation
+can complete while an edit/deletion is happening; changes apply on the next worker
+refresh. Generation requires the backend to be running; startup recovers downtime.

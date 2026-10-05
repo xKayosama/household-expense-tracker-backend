@@ -56,7 +56,9 @@ const getMyGroups = async (req, res) => {
       }
     });
 
-    const groups = memberships.map((membership) => ({
+    // Population can return null for deleted groups, or undefined for legacy
+    // memberships that have not yet had householdId migrated to groupId.
+    const groups = memberships.filter((membership) => membership.groupId).map((membership) => ({
       id: membership.groupId._id,
       name: membership.groupId.name,
       currency: membership.groupId.currency,
@@ -162,19 +164,27 @@ const addGroupMember = async (req, res) => {
       userId: user._id
     });
 
-    if (existingMembership) {
+    if (existingMembership && existingMembership.status !== 'INACTIVE') {
       return res.status(409).json({
         success: false,
         message: 'User is already a member of this group.'
       });
     }
 
-    // Add member
-    const membership = await GroupMember.create({
-      groupId: req.group._id,
-      userId: user._id,
-      role: 'MEMBER'
-    });
+    // Reuse removed memberships so rejoining does not create duplicate records.
+    let membership;
+    if (existingMembership) {
+      existingMembership.status = 'ACTIVE';
+      existingMembership.role = 'MEMBER';
+      existingMembership.joinedAt = new Date();
+      membership = await existingMembership.save();
+    } else {
+      membership = await GroupMember.create({
+        groupId: req.group._id,
+        userId: user._id,
+        role: 'MEMBER'
+      });
+    }
 
     return res.status(201).json({
       success: true,

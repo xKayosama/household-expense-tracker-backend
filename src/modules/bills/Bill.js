@@ -62,6 +62,16 @@ const billSchema = new mongoose.Schema(
       default: null
     },
 
+    // Generated bills never act as recurrence sources.
+    recurrenceSourceId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Bill',
+      default: null
+    },
+
+    occurrenceNumber: { type: Number, min: 1 },
+    generatedThrough: { type: Number, default: 0, min: 0 },
+
     status: {
       type: String,
       enum: [
@@ -81,6 +91,12 @@ const billSchema = new mongoose.Schema(
   {
     timestamps: true
   }
+);
+
+// Required for idempotent generation across processes and interrupted runs.
+billSchema.index(
+  { recurrenceSourceId: 1, occurrenceNumber: 1 },
+  { unique: true, partialFilterExpression: { recurrenceSourceId: { $type: 'objectId' } } }
 );
 
 module.exports = mongoose.model('Bill', billSchema);

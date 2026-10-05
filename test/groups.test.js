@@ -53,18 +53,72 @@ test('Group create, list, read, update, delete preserve owner membership and cas
   res = response(); await groups.deleteGroup(req(), res); assert.equal(res.statusCode, 200);
 });
 
+test('group list skips missing references and preserves valid memberships', async () => {
+  const record = { _id: 'g', name: 'Trip', currency: 'PHP', ownerId: { _id: 'a' } };
+  mock.method(Member, 'find', filter => {
+    assert.deepEqual(filter, { userId: 'a', status: 'ACTIVE' });
+    return query([
+      { groupId: null, role: 'MEMBER' },
+      { householdId: 'legacy', role: 'OWNER' },
+      { groupId: record, role: 'OWNER', joinedAt: '2026-10-02' }
+    ]);
+  });
+  const res = response();
+  await groups.getMyGroups(req(), res);
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body.data.groups, [{
+    id: 'g', name: 'Trip', currency: 'PHP', role: 'OWNER',
+    owner: record.ownerId, joinedAt: '2026-10-02'
+  }]);
+  mock.method(Member, 'find', () => query([{ groupId: null }, {}]));
+  const empty = response();
+  await groups.getMyGroups(req(), empty);
+  assert.equal(empty.statusCode, 200);
+  assert.deepEqual(empty.body.data.groups, []);
+});
+
 test('member management keeps owner restrictions, duplicate rejection and INACTIVE removal', async () => {
   const User = require('../src/modules/users/User');
   mock.method(User, 'findOne', async () => ({ _id: 'b', email: 'b@example.com' }));
   mock.method(Member, 'findOne', async () => null);
   mock.method(Member, 'create', async fields => { assert.equal(fields.groupId, 'g'); return fields; });
   const request = req(); request.body.email = 'b@example.com'; let res = response(); await groups.addGroupMember(request, res); assert.equal(res.statusCode, 201);
-  mock.method(Member, 'findOne', async () => ({ status: 'INACTIVE' }));
+  mock.method(Member, 'findOne', async () => ({ status: 'ACTIVE' }));
   res = response(); await groups.addGroupMember(request, res); assert.equal(res.statusCode, 409);
   const membership = { status: 'ACTIVE', save: async () => {} }; mock.method(Member, 'findOne', async () => membership);
   request.params.userId = 'b'; res = response(); await groups.removeGroupMember(request, res); assert.equal(membership.status, 'INACTIVE');
   request.params.userId = 'a'; res = response(); await groups.removeGroupMember(request, res); assert.equal(res.statusCode, 400);
   request.membership.role = 'MEMBER'; res = response(); await groups.addGroupMember(request, res); assert.equal(res.statusCode, 403);
+});
+
+test('removed members can rejoin by reactivating their existing membership', async () => {
+  const User = require('../src/modules/users/User');
+  mock.method(User, 'findOne', async () => ({ _id: 'b', email: 'b@example.com' }));
+  let saves = 0;
+  const membership = {
+    status: 'ACTIVE', role: 'MEMBER', joinedAt: new Date('2020-01-01'),
+    async save() { saves++; return this; }
+  };
+  mock.method(Member, 'findOne', async () => membership);
+  mock.method(Member, 'create', () => assert.fail('must reuse the existing membership'));
+  const request = req();
+  request.params.userId = 'b';
+  request.body.email = 'b@example.com';
+  await groups.removeGroupMember(request, response());
+  assert.equal(membership.status, 'INACTIVE');
+  const beforeRejoin = Date.now();
+  const res = response();
+  await groups.addGroupMember(request, res);
+  assert.equal(res.statusCode, 201);
+  assert.equal(membership.status, 'ACTIVE');
+  assert.equal(membership.role, 'MEMBER');
+  assert.ok(membership.joinedAt.getTime() >= beforeRejoin);
+  assert.equal(res.body.data.member.joinedAt, membership.joinedAt);
+  assert.equal(saves, 2);
+  const duplicate = response();
+  await groups.addGroupMember(request, duplicate);
+  assert.equal(duplicate.statusCode, 409);
+  assert.equal(saves, 2);
 });
 
 const expenseRequest = (splitType, participants, amount = 10) => ({ ...req(), body: { description: 'Shared meal', paidBy: 'a', amount, splitType, participants } });

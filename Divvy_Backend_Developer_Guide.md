@@ -1,4 +1,4 @@
-HomeSplit
+Divvy
 
 Backend Developer Guide
 

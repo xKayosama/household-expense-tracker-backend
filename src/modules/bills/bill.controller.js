@@ -325,6 +325,14 @@ const updateBill = async (req, res) => {
       });
     }
 
+    if (bill.recurrenceSourceId && isRecurring === true) {
+      return res.status(400).json({
+        code: 400,
+        success: false,
+        message: 'Generated occurrences cannot become recurring sources. Create a new recurring bill instead.'
+      });
+    }
+
     // Use existing values when fields are not provided
     const updatedName =
       name !== undefined ? name.trim() : bill.name;

@@ -47,7 +47,7 @@ GET http://localhost:5000/api/health
 Expected:
 {
   "success": true,
-  "message": "HomeSplit API is running"
+  "message": "Divvy API is running"
 }
 ```
 

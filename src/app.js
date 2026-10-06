@@ -7,6 +7,7 @@ const expenseRoutes = require('./modules/expenses/expense.routes');
 const balanceRoutes = require('./modules/balances/balance.routes');
 const settlementRoutes = require('./modules/settlements/settlement.routes');
 const billRoutes = require('./modules/bills/bill.routes');
+const receiptRoutes = require('./modules/receipts/receipt.routes');
 const dashboardRoutes = require('./modules/dashboard/dashboard.routes');
 
 const app = express();
@@ -17,7 +18,7 @@ app.use(express.json());
 app.get('/api/health', (req, res) => {
   res.status(200).json({
     success: true,
-    message: 'HomeSplit API is running'
+    message: 'Divvy API is running'
   });
 });
 
@@ -28,6 +29,7 @@ app.use('/api/groups', balanceRoutes);
 app.use('/api/groups', settlementRoutes);
 app.use('/api/groups', billRoutes);
 app.use('/api/groups', dashboardRoutes);
+app.use('/api/groups', receiptRoutes);
 
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/bills', billRoutes);

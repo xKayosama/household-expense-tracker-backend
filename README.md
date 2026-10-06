@@ -144,3 +144,81 @@ Existing generated bills remain as history. Re-enabling resumes the sequence and
 catches up. Paying the source does not disable recurrence. In-flight generation
 can complete while an edit/deletion is happening; changes apply on the next worker
 refresh. Generation requires the backend to be running; startup recovers downtime.
+
+## Receipt upload and scanning
+
+Scanning now uses local Tesseract.js OCR and an English receipt-text parser.
+No API key, OpenAI account, or paid OCR service is required. Run `npm install` and
+restart the backend. English language data ships as an npm dependency and is loaded
+locally; scanning makes no external network calls. Server CPU/memory/hosting costs
+still apply. Node.js 22+ is required.
+
+For PDF receipts, install Poppler on the backend host (`brew install poppler` on
+macOS or `sudo apt-get install poppler-utils` on Debian/Ubuntu). `pdftoppm` must be
+on PATH, or set `PDFTOPPM_PATH` to its absolute executable path. Images do not need
+Poppler. PDFs scan at most the first three pages, with bounded raster dimensions.
+Missing Poppler returns 503 for PDFs without affecting image scans.
+
+**POST `/api/groups/:id/receipts/scan`**
+
+- Bearer JWT and ACTIVE membership in the Group are required.
+- Body: multipart/form-data, exactly one file field named `receipt`.
+- Accepts JPEG, PNG, WebP, and PDF, up to 10 MB; MIME and file signatures are checked.
+- Postman URL: `{{baseUrl}}/api/groups/{{groupId}}/receipts/scan`.
+- Local URL: `http://localhost:5000/api/groups/<groupId>/receipts/scan`.
+- In Postman, choose Body -> form-data -> `receipt` -> File. Let Postman generate
+  the multipart Content-Type header and boundary.
+
+Uploads are processed locally in an isolated OCR subprocess. Private temporary
+files are deleted after completion/failure; no permanent attachment or expense is
+created. Scans time out after 60 seconds and disconnecting cancels OCR. English
+receipt parsing is heuristic: merchant is a heading candidate, item quantities
+are extracted only from explicit quantity/price notation, and unreadable or
+ambiguous fields are null. Ambiguous numeric dates and bare dollar symbols are
+not assigned a date order or currency. The frontend must always show a review step.
+
+Successful response (unknown/unreadable fields are null):
+
+```json
+{
+  "success": true,
+  "message": "Receipt scanned. Review the extracted values before creating an expense.",
+  "data": {
+    "groupId": "<groupId>",
+    "requiresReview": true,
+    "receipt": {
+      "isReceipt": true,
+      "merchant": "Cafe",
+      "date": "2026-10-05",
+      "currency": "PHP",
+      "subtotal": 200,
+      "tax": 24,
+      "tip": null,
+      "total": 224,
+      "items": [{ "description": "Lunch", "quantity": 1, "unitPrice": 200, "total": 200 }],
+      "warnings": ["Local OCR uses receipt text patterns. Review every extracted value before saving."]
+    }
+  }
+}
+```
+
+The frontend must display an editable review step. Map reviewed merchant to expense
+`description`, reviewed total to `amount`, and reviewed date to `date`. Ask the user
+for category, payer, participants, and split type, then send the existing
+`POST /api/groups/:id/expenses` JSON payload. The scan result is not an expense
+payload and does not bypass any expense validation. Expense currency remains the
+Group's currency; explicitly resolve a differing receipt currency before saving.
+Line items are review data and are not persisted by the existing Expense model.
+
+Errors: 400 missing/invalid multipart input or Group ID; 401 unauthenticated;
+403 nonmember; 404 missing Group; 413 over 10 MB; 415 unsupported/mismatched file;
+422 non-receipt/unreadable receipt; 429 local throttle; 503 missing PDF renderer; 504 OCR timeout/cancellation.
+Internal paths and OCR errors are not returned verbatim.
+
+Per backend process, scanning is limited to five attempts per user per minute and
+four concurrent uploads/scans. Invalid upload attempts count toward this limit.
+Multiple instances have independent limits. Requests time out after 60 seconds
+and a disconnected client cancels its OCR subprocess.
+
+Implementation references: [Tesseract.js](https://github.com/naptha/tesseract.js)
+and [local language loading](https://github.com/naptha/tesseract.js/blob/master/docs/local-installation.md).
